@@ -1,0 +1,78 @@
+# MERGE FRAGMENT, NOT standalone kubectl apply. Keep existing Istio routes, services, pod template.
+# Focus stage is outside this schedule. First step removes its managed header route.
+# Replace the old per-stage analyses/sufficiency, do NOT append their waits to this schedule.
+# If prepending steps, adjust startingStep to the index of setWeight1.
+# 1%:3m15s;10%:5m15s;50%:41m;100%:5m. Planned waits total54m30s.
+# Background deadline58m; time measured from background startup, not build/focus/readiness.
+# Keep existing restart, availability, latency, payload=fail protections; budget their extra waits.
+# Main statistical window must contain only the current release, no focus/special routing.
+spec:
+  strategy:
+    canary:
+      dynamicStableScale: false
+      analysis:
+        startingStep: 1
+        templates:
+          - templateName: "rollout60-gross-guard"
+        args:
+          - name: "namespace"
+            valueFrom:
+              fieldRef:
+                fieldPath: "metadata.namespace"
+          - name: "prometheus-address"
+            value: "REPLACE_PROMETHEUS_URL"
+          - name: "app-name"
+            value: "ph-transfer"
+      steps:
+        - setHeaderRoute:
+            name: "set-header-canary"
+        - setWeight: 1
+        - analysis:
+            templates:
+              - templateName: "rollout60-sufficiency"
+            args:
+              - name: "namespace"
+                valueFrom:
+                  fieldRef:
+                    fieldPath: "metadata.namespace"
+              - name: "prometheus-address"
+                value: "REPLACE_PROMETHEUS_URL"
+              - name: "app-name"
+                value: "ph-transfer"
+              - name: "min-canary-requests"
+                value: "200"
+        - pause:
+            duration: "1m"
+        - setWeight: 10
+        - analysis:
+            templates:
+              - templateName: "rollout60-sufficiency"
+            args:
+              - name: "namespace"
+                valueFrom:
+                  fieldRef:
+                    fieldPath: "metadata.namespace"
+              - name: "prometheus-address"
+                value: "REPLACE_PROMETHEUS_URL"
+              - name: "app-name"
+                value: "ph-transfer"
+              - name: "min-canary-requests"
+                value: "500"
+        - pause:
+            duration: "3m"
+        - setWeight: 50
+        - analysis:
+            templates:
+              - templateName: "rollout60-final"
+            args:
+              - name: "namespace"
+                valueFrom:
+                  fieldRef:
+                    fieldPath: "metadata.namespace"
+              - name: "prometheus-address"
+                value: "REPLACE_PROMETHEUS_URL"
+              - name: "app-name"
+                value: "ph-transfer"
+        - setWeight: 100
+        - pause:
+            duration: "5m"

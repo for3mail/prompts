@@ -1,0 +1,263 @@
+# Values fragment in the user-provided notation, NOT an Argo Kubernetes manifest.
+# All PromQL computes from prms_http_request_seconds_count; NO recording rules required.
+# Chart-specific rendering of name/args/metrics must preserve these Argo fields.
+# Keep {{args.*}} literal for Argo; do not change escaping without inspecting chart tpl use.
+# Restore your existing Prometheus headers/auth. No thresholds or rollout waits changed.
+# Final query now returns U95(pc - 1.25*ps), NOT the previous decision code.
+# Final succeeds only when finite result <0.0001; all other outcomes stop promotion.
+# Background metrics stay continuous; do not add count or consecutiveSuccessLimit3.
+# Absent errors yield zero only with a measurable total for the same role/window.
+# Missing canary data or a zero canary request increase over 1m blocks promotion.
+rollouts:
+  analysisTemplates:
+    - name: "rollout60-gross-guard"
+      args:
+        - name: "namespace"
+        - name: "prometheus-address"
+        - name: "app-name"
+          value: "ph-transfer"
+      metrics:
+        - name: "gross-absolute-1m"
+          initialDelay: "75s"
+          interval: "15s"
+          consecutiveSuccessLimit: 0
+          failureLimit: 0
+          inconclusiveLimit: 0
+          consecutiveErrorLimit: 2
+          successCondition: "len(result) == 1 && !isNaN(result[0]) && !isInf(result[0]) && result[0] == 0"
+          failureCondition: "len(result) != 1 || isNaN(result[0]) || isInf(result[0]) || result[0] != 0"
+          provider:
+            prometheus:
+              address: "{{args.prometheus-address}}"
+              timeout: 10
+              query: |-
+                ((((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[1m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[1m]))) >= bool 0.005)
+                * ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[1m])) or vector(0)) >= bool 5)
+                * (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[1m])) >= bool 50))
+                # Canary count must increase over the last minute.
+                and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[1m])) > 0)
+                # Both roles must be present now; every visible sample must be 0..45s old.
+                and on() (count(
+                  (max by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) <= 45)
+                  and on(traffic_type) (min by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) >= 0)
+                ) == 2)
+                # 1m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])))
+                )
+                # 2m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])))
+                )
+        - name: "gross-growth-2m"
+          initialDelay: "135s"
+          interval: "15s"
+          consecutiveSuccessLimit: 0
+          failureLimit: 0
+          inconclusiveLimit: 0
+          consecutiveErrorLimit: 2
+          successCondition: "len(result) == 1 && !isNaN(result[0]) && !isInf(result[0]) && result[0] == 0"
+          failureCondition: "len(result) != 1 || isNaN(result[0]) || isInf(result[0]) || result[0] != 0"
+          provider:
+            prometheus:
+              address: "{{args.prometheus-address}}"
+              timeout: 10
+              query: |-
+                ((
+                  ((((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m]))) - ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m])))) >= bool 0.001)
+                  * ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m])) * (((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m]))) - ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m]))))) >= bool 10)
+                  and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m])) >= 200)
+                  and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m])) >= 200)
+                )
+                or
+                (
+                  vector(0)
+                  and on() ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m])) < 200) or (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m])) < 200))
+                ))
+                # Canary count must increase over the last minute.
+                and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[1m])) > 0)
+                # Both roles must be present now; every visible sample must be 0..45s old.
+                and on() (count(
+                  (max by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) <= 45)
+                  and on(traffic_type) (min by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) >= 0)
+                ) == 2)
+                # 1m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])))
+                )
+                # 2m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])))
+                )
+        - name: "inner-growth-2m"
+          initialDelay: "135s"
+          interval: "15s"
+          consecutiveSuccessLimit: 0
+          failureLimit: 0
+          inconclusiveLimit: 0
+          consecutiveErrorLimit: 2
+          successCondition: "len(result) == 1 && !isNaN(result[0]) && !isInf(result[0]) && result[0] == 0"
+          failureCondition: "len(result) != 1 || isNaN(result[0]) || isInf(result[0]) || result[0] != 0"
+          provider:
+            prometheus:
+              address: "{{args.prometheus-address}}"
+              timeout: 10
+              query: |-
+                ((
+                  ((((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error", error_code="inner"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m]))) - ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error", error_code="inner"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m])))) >= bool 0.001)
+                  * ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m])) * (((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error", error_code="inner"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m]))) - ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error", error_code="inner"}[2m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m]))))) >= bool 10)
+                  and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m])) >= 200)
+                  and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m])) >= 200)
+                  # An observed inner series needs a measurable increase in that role.
+                  unless on() (present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error", error_code="inner"}[2m])
+                    unless on(traffic_type) sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error", error_code="inner"}[2m])))
+                )
+                or
+                (
+                  vector(0)
+                  and on() ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m])) < 200) or (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m])) < 200))
+                ))
+                # Canary count must increase over the last minute.
+                and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[1m])) > 0)
+                # Both roles must be present now; every visible sample must be 0..45s old.
+                and on() (count(
+                  (max by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) <= 45)
+                  and on(traffic_type) (min by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) >= 0)
+                ) == 2)
+                # 1m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])))
+                )
+                # 2m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])))
+                )
+        - name: "budget-deadline"
+          initialDelay: "58m"
+          count: 1
+          consecutiveSuccessLimit: 0
+          failureLimit: 0
+          inconclusiveLimit: 0
+          consecutiveErrorLimit: 0
+          successCondition: "len(result) == 1 && !isNaN(result[0]) && !isInf(result[0]) && result[0] == 0"
+          failureCondition: "len(result) != 1 || isNaN(result[0]) || isInf(result[0]) || result[0] != 0"
+          provider:
+            prometheus:
+              address: "{{args.prometheus-address}}"
+              timeout: 10
+              query: |-
+                vector(1)
+    - name: "rollout60-sufficiency"
+      args:
+        - name: "namespace"
+        - name: "prometheus-address"
+        - name: "app-name"
+          value: "ph-transfer"
+        - name: "min-canary-requests"
+          value: "200"
+      metrics:
+        - name: "traffic-ready"
+          initialDelay: "135s"
+          count: 1
+          consecutiveSuccessLimit: 1
+          failureLimit: 0
+          inconclusiveLimit: 0
+          consecutiveErrorLimit: 0
+          successCondition: "len(result) == 1 && !isNaN(result[0]) && !isInf(result[0]) && result[0] == 1"
+          failureCondition: "len(result) != 1 || isNaN(result[0]) || isInf(result[0]) || result[0] != 1"
+          provider:
+            prometheus:
+              address: "{{args.prometheus-address}}"
+              timeout: 10
+              query: |-
+                ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[2m])) >= bool {{args.min-canary-requests}})
+                * (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[2m])) >= bool 500))
+                # Canary count must increase over the last minute.
+                and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[1m])) > 0)
+                # Both roles must be present now; every visible sample must be 0..45s old.
+                and on() (count(
+                  (max by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) <= 45)
+                  and on(traffic_type) (min by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) >= 0)
+                ) == 2)
+                # 1m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])))
+                )
+                # 2m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])))
+                )
+    - name: "rollout60-final"
+      args:
+        - name: "namespace"
+        - name: "prometheus-address"
+        - name: "app-name"
+          value: "ph-transfer"
+      metrics:
+        - name: "final-error-comparison"
+          initialDelay: "41m"
+          count: 1
+          consecutiveSuccessLimit: 1
+          failureLimit: 0
+          inconclusiveLimit: 0
+          consecutiveErrorLimit: 0
+          successCondition: "len(result) == 1 && !isNaN(result[0]) && !isInf(result[0]) && result[0] < 0.0001"
+          failureCondition: "len(result) != 1 || isNaN(result[0]) || isInf(result[0]) || result[0] >= 0.0001"
+          provider:
+            prometheus:
+              address: "{{args.prometheus-address}}"
+              timeout: 10
+              query: |-
+                (((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[40m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[40m])))
+                - 1.25 * ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error"}[40m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[40m])))
+                + sqrt(
+                  ((
+                  3.8414588206941254 * (1 - 2 * ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[40m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[40m]))))
+                  + 1.959963984540054 * sqrt(3.8414588206941254 + 4 * (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[40m])) or vector(0)) * (1 - ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary", payload="error"}[40m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[40m])))))
+                ) / (2 * (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[40m])) + 3.8414588206941254)))^2
+                  + 1.5625 * ((
+                  -3.8414588206941254 * (1 - 2 * ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error"}[40m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[40m]))))
+                  + 1.959963984540054 * sqrt(3.8414588206941254 + 4 * (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error"}[40m])) or vector(0)) * (1 - ((sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable", payload="error"}[40m])) or vector(0)) / sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[40m])))))
+                ) / (2 * (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="stable"}[40m])) + 3.8414588206941254)))^2
+                ))
+                # Canary count must increase over the last minute.
+                and on() (sum(increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type="canary"}[1m])) > 0)
+                # Both roles must be present now; every visible sample must be 0..45s old.
+                and on() (count(
+                  (max by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) <= 45)
+                  and on(traffic_type) (min by (traffic_type) (time() - timestamp(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"})) >= 0)
+                ) == 2)
+                # 1m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[1m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[1m])))
+                )
+                # 2m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])) >= 0) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[2m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[2m])))
+                )
+                # 40m: require valid totals for both roles and 0 <= measured errors <= total.
+                and on() (count((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[40m])) >= 200000) < +Inf) == 2)
+                unless on() (
+                  present_over_time(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[40m])
+                  unless on(traffic_type) ((sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable", payload="error"}[40m])) >= 0) <= sum by (traffic_type) (increase(prms_http_request_seconds_count{namespace="{{args.namespace}}", appName="{{args.app-name}}", traffic_type=~"canary|stable"}[40m])))
+                )
